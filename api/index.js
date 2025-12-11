@@ -9,11 +9,9 @@ const server = http.createServer(app);
 app.use((req, res, next) => {
     const allowedOrigins = [
         'https://tymbochka50-art.github.io',
-        'https://tymb.github.io',
         'http://localhost:3000',
         'http://127.0.0.1:3000',
-        'http://localhost:5500',
-        'http://127.0.0.1:5500'
+        'http://localhost:5500'
     ];
     
     const origin = req.headers.origin;
@@ -21,11 +19,10 @@ app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', origin);
     }
     
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     
-    // Обработка предварительного запроса OPTIONS
     if (req.method === 'OPTIONS') {
         return res.sendStatus(200);
     }
@@ -39,11 +36,9 @@ const io = socketIO(server, {
         origin: (origin, callback) => {
             const allowedOrigins = [
                 'https://tymbochka50-art.github.io',
-                'https://tymb.github.io',
                 'http://localhost:3000',
                 'http://127.0.0.1:3000',
-                'http://localhost:5500',
-                'http://127.0.0.1:5500'
+                'http://localhost:5500'
             ];
             
             if (!origin || allowedOrigins.includes(origin)) {
@@ -66,18 +61,6 @@ const gameServers = {
         description: 'Основной игровой сервер',
         maxPlayers: 20,
         players: {}
-    },
-    'server-europe': {
-        name: 'Европейский сервер',
-        description: 'Низкий пинг для Европы',
-        maxPlayers: 15,
-        players: {}
-    },
-    'server-usa': {
-        name: 'Американский сервер',
-        description: 'Для игроков из США',
-        maxPlayers: 15,
-        players: {}
     }
 };
 
@@ -85,34 +68,29 @@ const gameServers = {
 app.use(express.json());
 
 app.get('/api/servers', (req, res) => {
-    try {
-        const servers = Object.keys(gameServers).map(serverId => {
-            const server = gameServers[serverId];
-            return {
-                id: serverId,
-                name: server.name,
-                description: server.description,
-                maxPlayers: server.maxPlayers,
-                players: Object.keys(server.players).length
-            };
-        });
-        console.log('Запрос списка серверов:', servers);
-        res.json(servers);
-    } catch (error) {
-        console.error('Ошибка при получении списка серверов:', error);
-        res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-    }
+    console.log('GET /api/servers');
+    const servers = Object.keys(gameServers).map(serverId => {
+        const server = gameServers[serverId];
+        return {
+            id: serverId,
+            name: server.name,
+            description: server.description,
+            maxPlayers: server.maxPlayers,
+            players: Object.keys(server.players).length
+        };
+    });
+    res.json(servers);
 });
 
-// Тестовый endpoint
-app.get('/health', (req, res) => {
+// Health check endpoint
+app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Отладка подключений
-app.get('/debug', (req, res) => {
+// Debug endpoint
+app.get('/api/debug', (req, res) => {
     const debugInfo = {
-        totalConnections: io.engine.clientsCount,
+        totalConnections: io.engine?.clientsCount || 0,
         servers: {}
     };
     
@@ -121,8 +99,7 @@ app.get('/debug', (req, res) => {
             playerCount: Object.keys(gameServers[serverId].players).length,
             players: Object.values(gameServers[serverId].players).map(p => ({
                 id: p.id,
-                username: p.username,
-                position: p.position
+                username: p.username
             }))
         };
     });
@@ -132,51 +109,32 @@ app.get('/debug', (req, res) => {
 
 // Обработка WebSocket соединений
 io.on('connection', (socket) => {
-    console.log(`✅ Новое подключение: ${socket.id}`);
-    console.log(`📡 Клиент подключился с origin: ${socket.handshake.headers.origin}`);
-    console.log(`🔗 Socket transport: ${socket.conn.transport.name}`);
+    console.log(`Новое подключение: ${socket.id}`);
     
-    // Отправляем приветственное сообщение
     socket.emit('welcome', { 
-        message: 'Подключено к игровому серверу',
-        serverTime: Date.now(),
-        socketId: socket.id
+        message: 'Connected to game server',
+        socketId: socket.id,
+        timestamp: Date.now()
     });
 
     socket.on('join', (data) => {
-        console.log(`🎮 Запрос на подключение:`, data);
-        
+        console.log('Join request:', data);
         const { username, room } = data;
         
-        // Проверка существования сервера
         if (!gameServers[room]) {
-            socket.emit('error', 'Сервер не найден');
-            console.log(`❌ Сервер ${room} не найден для ${socket.id}`);
+            socket.emit('error', 'Server not found');
             return;
         }
 
         const server = gameServers[room];
         
-        // Проверка заполненности сервера
-        const playerCount = Object.keys(server.players).length;
-        if (playerCount >= server.maxPlayers) {
-            socket.emit('error', 'Сервер переполнен');
-            console.log(`❌ Сервер ${room} переполнен для ${socket.id}`);
+        if (Object.keys(server.players).length >= server.maxPlayers) {
+            socket.emit('error', 'Server is full');
             return;
         }
 
-        // Проверка имени пользователя
         if (!username || username.length < 2 || username.length > 20) {
-            socket.emit('error', 'Неверное имя пользователя');
-            console.log(`❌ Неверное имя пользователя: ${username}`);
-            return;
-        }
-
-        // Проверка уникальности имени на сервере
-        const existingUsernames = Object.values(server.players).map(p => p.username);
-        if (existingUsernames.includes(username)) {
-            socket.emit('error', 'Имя уже занято на этом сервере');
-            console.log(`❌ Имя ${username} уже занято на сервере ${room}`);
+            socket.emit('error', 'Invalid username');
             return;
         }
 
@@ -197,115 +155,67 @@ io.on('connection', (socket) => {
             joinedAt: Date.now()
         };
 
-        // Отправка текущих игроков новому игроку
+        // Отправка текущих игроков
         socket.emit('currentPlayers', server.players);
         
-        // Уведомление других игроков о новом игроке
+        // Уведомление других игроков
         socket.to(room).emit('newPlayer', server.players[socket.id]);
 
-        // Обновление счета игроков для всех в комнате
+        // Обновление счетчика
         io.to(room).emit('playerCount', Object.keys(server.players).length);
         
-        console.log(`✅ ${username} присоединился к ${room}`);
-        console.log(`📊 Игроков на сервере ${room}: ${Object.keys(server.players).length}`);
-        
-        // Отправляем отладочную информацию
-        socket.emit('serverInfo', {
-            serverName: server.name,
-            playerCount: Object.keys(server.players).length,
-            otherPlayers: Object.keys(server.players).length - 1
-        });
+        console.log(`${username} joined ${room}, total: ${Object.keys(server.players).length}`);
     });
 
     socket.on('playerMovement', (data) => {
-        const { room, position, rotation } = data;
+        const { room, position } = data;
         
-        if (!gameServers[room] || !gameServers[room].players[socket.id]) {
-            console.log(`❌ Движение игрока не обработано: не найден сервер или игрок`);
-            return;
+        if (gameServers[room] && gameServers[room].players[socket.id]) {
+            gameServers[room].players[socket.id].position = position;
+            
+            socket.to(room).emit('playerMoved', {
+                id: socket.id,
+                position: position
+            });
         }
-
-        // Обновление позиции игрока
-        gameServers[room].players[socket.id].position = position;
-        gameServers[room].players[socket.id].rotation = rotation;
-        
-        // Рассылка обновления другим игрокам
-        socket.to(room).emit('playerMoved', {
-            id: socket.id,
-            position: position,
-            rotation: rotation
-        });
-        
-        // Логируем движение
-        console.log(`🚶 ${gameServers[room].players[socket.id].username} движется:`, 
-                   `x:${position.x.toFixed(2)}, y:${position.y.toFixed(2)}, z:${position.z.toFixed(2)}`);
     });
 
-    socket.on('disconnect', (reason) => {
-        console.log(`❌ Отключение: ${socket.id}, причина: ${reason}`);
-        
-        // Поиск и удаление игрока из всех серверов
+    socket.on('disconnect', () => {
         Object.keys(gameServers).forEach(room => {
             const server = gameServers[room];
             if (server.players[socket.id]) {
                 const username = server.players[socket.id].username;
                 delete server.players[socket.id];
                 
-                // Уведомление других игроков
                 io.to(room).emit('playerDisconnected', socket.id);
                 io.to(room).emit('playerCount', Object.keys(server.players).length);
                 
-                console.log(`👋 ${username} отключился от ${room}`);
+                console.log(`${username} disconnected from ${room}`);
             }
         });
     });
-
-    socket.on('ping', () => {
-        socket.emit('pong', { timestamp: Date.now() });
-    });
 });
 
-// Функция очистки неактивных игроков
-setInterval(() => {
-    Object.keys(gameServers).forEach(room => {
-        const server = gameServers[room];
-        const now = Date.now();
-        
-        Object.keys(server.players).forEach(playerId => {
-            const player = server.players[playerId];
-            // Удаляем игроков, которые не активны более 5 минут
-            if (now - player.joinedAt > 300000) {
-                delete server.players[playerId];
-                io.to(room).emit('playerDisconnected', playerId);
-                io.to(room).emit('playerCount', Object.keys(server.players).length);
-                console.log(`🕒 Удален неактивный игрок ${player.username} из ${room}`);
-            }
-        });
+// Для локальной разработки
+if (process.env.NODE_ENV !== 'production') {
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+        console.log(`🚀 Local server running on port ${PORT}`);
+        console.log(`📡 Socket.IO: ws://localhost:${PORT}/socket.io/`);
+        console.log(`🌐 API: http://localhost:${PORT}/api/servers`);
     });
-}, 60000); // Каждую минуту
+}
 
-// Старт сервера
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 Сервер запущен на порту ${PORT}`);
-    console.log('🌐 Доступные серверы:');
-    Object.keys(gameServers).forEach(serverId => {
-        const server = gameServers[serverId];
-        console.log(`   - ${server.name} (ID: ${serverId}) [${server.maxPlayers} игроков]`);
-    });
-    console.log(`📡 Socket.IO endpoint: ws://localhost:${PORT}/socket.io/`);
-    console.log(`🌐 HTTP API: http://localhost:${PORT}/api/servers`);
-});
-
-// Для Vercel Serverless Functions
+// Экспорт для Vercel Serverless
 module.exports = (req, res) => {
-    // Перенаправляем все запросы к /socket.io на WebSocket сервер
+    // Обработка HTTP запросов через Express
     if (req.url.includes('/socket.io/')) {
-        // WebSocket соединения обрабатываются автоматически
-        res.writeHead(200);
-        res.end('Socket.IO endpoint');
+        // Socket.IO обрабатывает WebSocket соединения автоматически
+        // Для Vercel нужно вернуть правильный ответ
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'socket.io' }));
     } else {
-        // Обычные HTTP запросы
+        // Остальные запросы через Express
         app(req, res);
     }
 };
